@@ -2,6 +2,10 @@ name: Windows installer
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Версия релиза (без «v»)'
+        default: '1.0.0'
   push:
     tags: ['v*']
 
@@ -26,10 +30,11 @@ jobs:
           name: PDF-Studio-Windows
           path: release/*.exe
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          name: PDF Studio ${{ github.ref_name }}
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          name: PDF Studio ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref_name }}
           files: release/*.exe
           body: |
             **Установка:** скачайте `PDF-Studio-Setup-*.exe` и запустите.
