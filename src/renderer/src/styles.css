@@ -140,6 +140,18 @@ button {
   filter: blur(60px);
   opacity: 0.55;
   animation: drift 26s ease-in-out infinite alternate;
+  /* Анимация идёт только когда подложка видна (эмуляция стекла) и окно в фокусе */
+  animation-play-state: paused;
+}
+:root[data-glass='emulated']:not([data-inactive]) .backdrop i {
+  animation-play-state: running;
+}
+
+/* Перетаскивание слайдера «Глубина»: без переходов, значения применяются сразу */
+:root[data-adjusting] *,
+:root[data-adjusting] *::before,
+:root[data-adjusting] *::after {
+  transition: none !important;
 }
 .backdrop i:nth-child(1) {
   width: 46vw;

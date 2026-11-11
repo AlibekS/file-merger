@@ -65,7 +65,7 @@ function colorComponents(dict: string): number {
 }
 
 function num(dict: string, key: string): number | null {
-  const m = new RegExp('/' + key + '\\s+(\\d+)(?!\\s+\\d+\\s+R)').exec(dict)
+  const m = new RegExp('/' + key + '\\s+(\\d+)(?!\\d|\\s+\\d+\\s+R)').exec(dict)
   return m ? Number(m[1]) : null
 }
 

@@ -31,21 +31,46 @@ export function App() {
     void window.pdf.tools().then(setTools)
   }, [])
 
-  // Применение темы и Liquid Glass.
+  // Тема и включение Liquid Glass: только это уходит в main-процесс (материал окна, заголовок).
+  const { glass, theme, depth } = appearance
   useEffect(() => {
     const root = document.documentElement
     root.dataset.theme = dark ? 'dark' : 'light'
     const native = !!tools?.nativeGlass
-    root.dataset.glass = appearance.glass ? (native ? 'native' : 'emulated') : 'off'
+    root.dataset.glass = glass ? (native ? 'native' : 'emulated') : 'off'
     root.dataset.platform = tools?.platform ?? ''
-    const d = appearance.depth / 100
-    // 0% → плотные панели (0.85, blur 8px); 100% → максимально прозрачные (0.25, blur 32px)
-    root.style.setProperty('--glass-alpha', (0.85 - 0.6 * d).toFixed(3))
-    root.style.setProperty('--glass-blur', `${Math.round(8 + 24 * d)}px`)
-    root.style.setProperty('--glass-sat', `${Math.round(140 + 60 * d)}%`)
-    root.dataset.contrast = appearance.glass && d > 0.55 ? 'high' : 'normal'
-    void window.pdf.setAppearance({ glass: appearance.glass, dark, theme: appearance.theme })
-  }, [appearance, dark, tools])
+    void window.pdf.setAppearance({ glass, dark, theme })
+  }, [glass, theme, dark, tools])
+
+  // Глубина прозрачности — чисто CSS-переменные, без IPC; не чаще одного раза за кадр.
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => {
+      const root = document.documentElement
+      const d = depth / 100
+      // 0% → плотные панели (0.85, blur 8px); 100% → максимально прозрачные (0.25, blur 32px)
+      root.style.setProperty('--glass-alpha', (0.85 - 0.6 * d).toFixed(3))
+      root.style.setProperty('--glass-blur', `${Math.round(8 + 24 * d)}px`)
+      root.style.setProperty('--glass-sat', `${Math.round(140 + 60 * d)}%`)
+      root.dataset.contrast = glass && d > 0.55 ? 'high' : 'normal'
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [depth, glass])
+
+  // Фоновая анимация стекла останавливается, когда окно не в фокусе.
+  useEffect(() => {
+    const root = document.documentElement
+    const sync = () => {
+      if (document.hasFocus()) delete root.dataset.inactive
+      else root.dataset.inactive = 'true'
+    }
+    sync()
+    window.addEventListener('focus', sync)
+    window.addEventListener('blur', sync)
+    return () => {
+      window.removeEventListener('focus', sync)
+      window.removeEventListener('blur', sync)
+    }
+  }, [])
 
   return (
     <div className="app">

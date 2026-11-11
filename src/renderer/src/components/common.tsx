@@ -355,10 +355,23 @@ export function ProgressFooter({
   )
 }
 
-export function WorkspaceHead({ title, icon, onBack, children }: { title: string; icon: ReactNode; onBack: () => void; children?: ReactNode }) {
+export function WorkspaceHead({
+  title,
+  icon,
+  onBack,
+  busy,
+  children
+}: {
+  title: string
+  icon: ReactNode
+  onBack: () => void
+  /** Идёт задание: уходить с экрана нельзя, иначе его будет нечем отменить. */
+  busy?: boolean
+  children?: ReactNode
+}) {
   return (
     <div className="ws-head">
-      <button className="btn ghost" onClick={onBack}>
+      <button className="btn ghost" onClick={onBack} disabled={busy} title={busy ? 'Дождитесь завершения или отмените обработку' : undefined}>
         <Icon.Back /> Назад
       </button>
       <h1>

@@ -23,6 +23,17 @@ export class PasswordError extends Error {
 
 export class EngineMissingError extends Error {}
 
+/** Ошибка объединения, вызванная конкретным входным файлом. */
+export class MergeInputError extends Error {
+  constructor(
+    message: string,
+    public readonly path: string,
+    public readonly locked = false
+  ) {
+    super(message)
+  }
+}
+
 // ───────────────────────── pdf-lib worker ─────────────────────────
 
 function workerPath(): string {
@@ -81,6 +92,20 @@ function explainQpdf(stderr: string): Error {
     .replace(/^operation for .*? failed:\s*/i, '')
     .slice(0, 160)
   return new Error(reason ? `Файл повреждён или не читается (${reason})` : 'Файл повреждён или не читается')
+}
+
+/** Ищет в сообщениях qpdf входной файл, на котором он остановился. */
+function culpritPath(stderr: string, paths: string[]): string | null {
+  const lines = stderr.split('\n').map((l) => l.trim()).filter(Boolean)
+  const errors = lines.filter((l) => !/^WARNING/i.test(l))
+  for (const group of [errors, lines]) {
+    for (let i = group.length - 1; i >= 0; i--) {
+      let best: string | null = null
+      for (const p of paths) if (group[i].includes(p) && (!best || p.length > best.length)) best = p
+      if (best) return best
+    }
+  }
+  return null
 }
 
 // ───────────────────────── анализ ─────────────────────────
@@ -202,7 +227,8 @@ export function ghostscriptArgs(preset: CompressPreset, input: string, output: s
       `/ColorACSImageDict << /QFactor ${q} /Blend 1 /HSamples ${samples} /VSamples ${samples} >> ` +
       `/GrayACSImageDict << /QFactor ${q} /Blend 1 /HSamples [1 1 1 1] /VSamples [1 1 1 1] >> >> setdistillerparams`
   }
-  const out = [...common, ...params, `-sOutputFile=${output}`]
+  // Ghostscript трактует «%» в имени выходного файла как формат (%d — номер страницы).
+  const out = [...common, ...params, `-sOutputFile=${output.replace(/%/g, '%%')}`]
   if (distiller) out.push('-c', distiller, '-f')
   out.push(input)
   if (preset === 'ultra') {
@@ -213,14 +239,27 @@ export function ghostscriptArgs(preset: CompressPreset, input: string, output: s
 }
 
 /** Финальный проход qpdf: object streams + перекомпрессия Flate. Без потерь. */
-async function qpdfOptimize(input: string, output: string, signal?: AbortSignal, password?: string): Promise<void> {
+async function qpdfOptimize(
+  input: string,
+  output: string,
+  opts: {
+    signal?: AbortSignal
+    /** Пароль для открытия input. */
+    password?: string
+    /** Зашифровать результат этим паролем (AES-256), чтобы защита исходного файла не терялась. */
+    encryptWith?: string
+    onFraction?: (f: number) => void
+  } = {}
+): Promise<void> {
   const { qpdf } = findTools()
   if (!qpdf) throw new EngineMissingError('qpdf не найден')
+  const { signal, password, encryptWith, onFraction } = opts
   const r = await runQpdf(
     qpdf,
     [
       ...pw(password),
-      '--decrypt',
+      ...(encryptWith ? ['--encrypt', encryptWith, encryptWith, '256', '--'] : ['--decrypt']),
+      ...(onFraction ? ['--progress'] : []),
       '--object-streams=generate',
       '--compress-streams=y',
       '--recompress-flate',
@@ -229,7 +268,15 @@ async function qpdfOptimize(input: string, output: string, signal?: AbortSignal,
       input,
       output
     ],
-    { signal }
+    {
+      signal,
+      onLine: onFraction
+        ? (l) => {
+            const m = /progress:\s*(\d+)%/.exec(l)
+            if (m) onFraction(Math.min(0.95, Number(m[1]) / 100))
+          }
+        : undefined
+    }
   )
   if (qpdfFailed(r)) throw explainQpdf(r.stderr)
 }
@@ -249,10 +296,21 @@ export async function compressFile(
   const { size: originalSize } = await stat(input)
   const tmp1 = tempSibling(output)
   const tmp2 = tempSibling(output)
+  const tmp3 = tempSibling(output)
   const { signal, onFraction, password } = opts
   try {
-    let produced: string | null = null
-    if (gs) {
+    let produced: string
+    if (preset === 'light') {
+      // «Лёгкая» — строго без потерь: только структурная оптимизация qpdf.
+      // Ghostscript переписывает документ и может сломать формы, вложения и подписи.
+      if (qpdf) {
+        await qpdfOptimize(input, tmp2, { signal, password, encryptWith: password, onFraction })
+      } else {
+        if (password) throw new PasswordError('Для зашифрованных файлов нужен qpdf')
+        await runWorker({ op: 'resave', path: input, out: tmp2 }, signal)
+      }
+      produced = tmp2
+    } else if (gs) {
       const total = opts.pages ?? 0
       const r = await run(gs, ghostscriptArgs(preset, input, tmp1, password), {
         signal,
@@ -269,45 +327,32 @@ export async function compressFile(
         )
       if (r.code !== 0 || fatal) {
         if (/password/i.test(text)) throw new PasswordError(password ? 'Неверный пароль' : 'Файл защищён паролем')
-        if (qpdf && preset === 'light') {
-          // Ghostscript не справился — для лёгкого режима хватит qpdf
-        } else {
-          const line = text.split('\n').find((x) => /error/i.test(x)) ?? text.split('\n').find(Boolean) ?? ''
-          throw new Error(`Файл повреждён или не читается: ${line.trim().slice(0, 200)}`)
-        }
-      } else {
-        produced = tmp1
+        const line = text.split('\n').find((x) => /error/i.test(x)) ?? text.split('\n').find(Boolean) ?? ''
+        throw new Error(`Файл повреждён или не читается: ${line.trim().slice(0, 200)}`)
       }
-      if (produced && qpdf) {
+      produced = tmp1
+      if (qpdf) {
         try {
-          await qpdfOptimize(tmp1, tmp2, signal)
+          // Ghostscript снимает шифрование — возвращаем защиту тем же паролем.
+          await qpdfOptimize(tmp1, tmp2, { signal, encryptWith: password })
           produced = tmp2
         } catch (e) {
-          if (e instanceof CancelledError) throw e
-          // оставляем результат Ghostscript
+          // Без пароля можно оставить результат Ghostscript; с паролем — нельзя,
+          // иначе защищённый документ молча сохранится открытым.
+          if (e instanceof CancelledError || password) throw e
         }
+      } else if (password) {
+        throw new PasswordError('Для зашифрованных файлов нужен qpdf')
       }
-    } else if (preset === 'light') {
-      if (qpdf) {
-        await qpdfOptimize(input, tmp2, signal, password)
-      } else {
-        if (password) throw new PasswordError('Для зашифрованных файлов нужен qpdf или Ghostscript')
-        await runWorker({ op: 'resave', path: input, out: tmp2 }, signal)
-      }
-      produced = tmp2
     } else {
       throw new EngineMissingError(
         'Ghostscript не найден — режимы «Средняя» и «Ультра» недоступны. Установите Ghostscript (см. README).'
       )
     }
-    if (!produced) {
-      await qpdfOptimize(input, tmp2, signal, password)
-      produced = tmp2
-    }
 
     // Контроль целостности: число страниц результата должно совпасть с исходным.
     if (qpdf && opts.pages) {
-      const n = await runQpdf(qpdf, ['--show-npages', produced], { signal })
+      const n = await runQpdf(qpdf, [...pw(password), '--show-npages', produced], { signal })
       const got = parseInt(n.stdout, 10)
       if (!qpdfFailed(n) && got && got !== opts.pages) {
         throw new Error(`Сжатие дало ${got} стр. вместо ${opts.pages} — файл повреждён или не поддерживается`)
@@ -315,8 +360,11 @@ export async function compressFile(
     }
     const { size } = await stat(produced)
     if (size >= originalSize) {
-      // Файл уже оптимально сжат — сохраняем копию оригинала.
-      await copyFile(input, output)
+      // Файл уже оптимально сжат — сохраняем копию оригинала (через временный файл,
+      // чтобы прерванное копирование не оставило обрезанный результат).
+      await copyFile(input, tmp3)
+      if (signal?.aborted) throw new CancelledError()
+      await commit(tmp3, output)
       return { size: originalSize, optimal: true }
     }
     await commit(produced, output)
@@ -324,6 +372,7 @@ export async function compressFile(
   } finally {
     await safeRm(tmp1)
     await safeRm(tmp2)
+    await safeRm(tmp3)
   }
 }
 
@@ -348,7 +397,11 @@ export async function mergeFiles(
           if (m) opts.onFraction?.(Number(m[1]) / 100)
         }
       })
-      if (qpdfFailed(r)) throw explainQpdf(r.stderr)
+      if (qpdfFailed(r)) {
+        const err = explainQpdf(r.stderr)
+        const bad = culpritPath(r.stderr, inputs.map((f) => f.path))
+        throw bad ? new MergeInputError(err.message, bad, err instanceof PasswordError) : err
+      }
     } else {
       if (inputs.some((f) => f.password)) throw new PasswordError('Для зашифрованных файлов нужен qpdf')
       await runWorker({ op: 'merge', inputs: inputs.map((f) => f.path), out: tmp }, opts.signal, opts.onFraction)
@@ -440,7 +493,8 @@ export async function extractRanges(
 export async function sampleRatios(
   input: string,
   pages: number,
-  password?: string
+  password?: string,
+  signal?: AbortSignal
 ): Promise<Record<CompressPreset, number> | null> {
   const { gs, qpdf } = findTools()
   if (!gs || !qpdf || !pages) return null
@@ -449,17 +503,26 @@ export async function sampleRatios(
   try {
     const sample = join(dir, 'in.pdf')
     const picks = pages >= 3 ? `1,${Math.ceil(pages / 2)}` : '1'
-    const r = await runQpdf(qpdf, [...pw(password), '--decrypt', input, '--pages', '.', picks, '--', sample])
+    const r = await runQpdf(qpdf, [...pw(password), '--decrypt', input, '--pages', '.', picks, '--', sample], { signal })
     if (qpdfFailed(r)) return null
     const inSize = (await stat(sample)).size
     const out: Partial<Record<CompressPreset, number>> = {}
     for (const preset of ['light', 'medium', 'ultra'] as CompressPreset[]) {
       const o1 = join(dir, `${preset}.pdf`)
       const o2 = join(dir, `${preset}-q.pdf`)
-      const g = await run(gs, ghostscriptArgs(preset, sample, o1))
-      if (g.code !== 0) return null
-      const q = await runQpdf(qpdf, ['--object-streams=generate', '--compress-streams=y', '--recompress-flate', o1, o2])
-      const size = (await stat(qpdfFailed(q) ? o1 : o2)).size
+      let size: number
+      if (preset === 'light') {
+        // тот же путь, что и при настоящем сжатии: только qpdf
+        await qpdfOptimize(sample, o2, { signal })
+        size = (await stat(o2)).size
+      } else {
+        const g = await run(gs, ghostscriptArgs(preset, sample, o1), { signal })
+        if (g.code !== 0) return null
+        const q = await runQpdf(qpdf, ['--object-streams=generate', '--compress-streams=y', '--recompress-flate', o1, o2], {
+          signal
+        })
+        size = (await stat(qpdfFailed(q) ? o1 : o2)).size
+      }
       out[preset] = Math.min(1, size / inSize)
     }
     return out as Record<CompressPreset, number>

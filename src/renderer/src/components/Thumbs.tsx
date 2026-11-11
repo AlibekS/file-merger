@@ -2,7 +2,7 @@
 // поэтому даже гигабайтный документ открывается мгновенно; миниатюры рисуются
 // лениво — только для видимых страниц.
 
-import { useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import * as pdfjs from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { Icon } from '../icons'
@@ -50,6 +50,12 @@ export function Thumbs({
   docRef.current = doc
   const requested = useRef(new Set<number>())
   const lastClicked = useRef<number | null>(null)
+  // blob-URL готовых миниатюр: храним в ref, чтобы освободить именно то, что было создано.
+  const urlsRef = useRef<Record<number, string>>({})
+  const selectedRef = useRef(selected)
+  selectedRef.current = selected
+  const onChangeRef = useRef(onChange)
+  onChangeRef.current = onChange
 
   useEffect(() => {
     let cancelled = false
@@ -84,12 +90,13 @@ export function Thumbs({
     return () => {
       cancelled = true
       void task.destroy()
+      // смена файла или размонтирование — освобождаем все созданные миниатюры
+      for (const u of Object.values(urlsRef.current)) URL.revokeObjectURL(u)
+      urlsRef.current = {}
     }
   }, [item.path, item.size, item.password])
 
-  useEffect(() => () => Object.values(urls).forEach((u) => URL.revokeObjectURL(u)), [doc]) // eslint-disable-line
-
-  const pump = async (d: Doc) => {
+  const pump = useCallback(async (d: Doc) => {
     if (busy.current === d) return
     busy.current = d
     try {
@@ -111,6 +118,7 @@ export function Thumbs({
           const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/jpeg', 0.82))
           if (blob && docRef.current === d) {
             const url = URL.createObjectURL(blob)
+            urlsRef.current[n] = url
             setUrls((u) => ({ ...u, [n]: url }))
           }
         } catch (e) {
@@ -121,18 +129,40 @@ export function Thumbs({
     } finally {
       if (busy.current === d) busy.current = null
     }
-  }
+  }, [])
 
-  const request = (n: number) => {
-    if (!doc || requested.current.has(n)) return
-    requested.current.add(n)
-    queue.current.push(n)
-    void pump(doc)
+  const request = useCallback(
+    (n: number) => {
+      const d = docRef.current
+      if (!d || requested.current.has(n)) return
+      requested.current.add(n)
+      queue.current.push(n)
+      void pump(d)
+    },
+    [pump]
+  )
+
+  // Один наблюдатель на всю сетку: карточка, попавшая в зону видимости, запрашивает миниатюру.
+  const ioRef = useRef<IntersectionObserver | null>(null)
+  if (!ioRef.current) {
+    ioRef.current = new IntersectionObserver(
+      (entries, io) => {
+        for (const e of entries) {
+          if (!e.isIntersecting) continue
+          io.unobserve(e.target)
+          request(Number((e.target as HTMLElement).dataset.page))
+        }
+      },
+      { rootMargin: '300px' }
+    )
   }
+  const io = ioRef.current
+  useEffect(() => () => io.disconnect(), [io])
 
   const pages = item.info?.pages ?? doc?.numPages ?? 0
 
-  const toggle = (n: number, shift: boolean) => {
+  const toggle = useCallback((n: number, shift: boolean) => {
+    const selected = selectedRef.current
     const next = new Set(selected)
     if (shift && lastClicked.current !== null) {
       const [a, b] = [Math.min(lastClicked.current, n), Math.max(lastClicked.current, n)]
@@ -141,8 +171,8 @@ export function Thumbs({
     } else if (next.has(n)) next.delete(n)
     else next.add(n)
     lastClicked.current = n
-    onChange(next)
-  }
+    onChangeRef.current(next)
+  }, [])
 
   return (
     <div className="thumbs-wrap">
@@ -177,7 +207,7 @@ export function Thumbs({
       ) : (
         <div className="thumbs">
           {Array.from({ length: pages }, (_, i) => i + 1).map((n) => (
-            <Thumb key={n} n={n} aspect={aspect} url={urls[n]} on={selected.has(n)} onVisible={request} onToggle={toggle} />
+            <Thumb key={n} n={n} aspect={aspect} url={urls[n]} on={selected.has(n)} io={io} onToggle={toggle} />
           ))}
         </div>
       )}
@@ -185,19 +215,19 @@ export function Thumbs({
   )
 }
 
-function Thumb({
+const Thumb = memo(function Thumb({
   n,
   aspect,
   url,
   on,
-  onVisible,
+  io,
   onToggle
 }: {
   n: number
   aspect: number
   url?: string
   on: boolean
-  onVisible: (n: number) => void
+  io: IntersectionObserver
   onToggle: (n: number, shift: boolean) => void
 }) {
   const ref = useRef<HTMLButtonElement>(null)
@@ -205,21 +235,12 @@ function Thumb({
     if (url) return
     const el = ref.current
     if (!el) return
-    const io = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((e) => e.isIntersecting)) {
-          onVisible(n)
-          io.disconnect()
-        }
-      },
-      { rootMargin: '300px' }
-    )
     io.observe(el)
-    return () => io.disconnect()
-  }, [n, url, onVisible])
+    return () => io.unobserve(el)
+  }, [url, io])
 
   return (
-    <button ref={ref} className="thumb" aria-pressed={on} onClick={(e) => onToggle(n, e.shiftKey)} title={`Страница ${n}`}>
+    <button ref={ref} className="thumb" data-page={n} aria-pressed={on} onClick={(e) => onToggle(n, e.shiftKey)} title={`Страница ${n}`}>
       <div className="paper" style={{ aspectRatio: `1 / ${aspect}` }}>
         {url ? <img src={url} alt="" draggable={false} /> : <div className="ph"><span className="spinner" /></div>}
         <span className="tick">
@@ -229,4 +250,4 @@ function Thumb({
       {n}
     </button>
   )
-}
+})

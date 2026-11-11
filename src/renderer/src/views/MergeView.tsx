@@ -105,7 +105,7 @@ export function MergeView({ onBack }: { onBack: () => void }) {
 
   return (
     <div className="workspace">
-      <WorkspaceHead title="Объединить PDF" icon={<MergeIcon />} onBack={onBack} />
+      <WorkspaceHead title="Объединить PDF" icon={<MergeIcon />} onBack={onBack} busy={job.running} />
 
       <section className="files-panel surface">
         {files.list.length === 0 ? (

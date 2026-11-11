@@ -57,7 +57,8 @@ export function SplitView({ onBack }: { onBack: () => void }) {
   const selectedTotal = Object.entries(selection).reduce((s, [id, set]) => s + (files.items[id] ? set.size : 0), 0)
 
   let blocker: string | null = null
-  if (!runnable.length) blocker = files.list.length ? 'Нет файлов, готовых к обработке' : 'Добавьте PDF файлы'
+  if (files.list.some((f) => f.status === 'pending')) blocker = 'Идёт анализ файлов…'
+  else if (!runnable.length) blocker = files.list.length ? 'Нет файлов, готовых к обработке' : 'Добавьте PDF файлы'
   else if (mode === 'ranges' && parsed?.error) blocker = parsed.error
   else if (mode === 'visual' && selectedTotal === 0) blocker = 'Отметьте страницы на миниатюрах'
   else if (output.mode === 'folder' && !output.dir) blocker = 'Выберите папку для сохранения'
@@ -122,7 +123,7 @@ export function SplitView({ onBack }: { onBack: () => void }) {
 
   return (
     <div className="workspace">
-      <WorkspaceHead title="Разделить PDF" icon={<SplitIcon />} onBack={onBack} />
+      <WorkspaceHead title="Разделить PDF" icon={<SplitIcon />} onBack={onBack} busy={job.running} />
 
       <section className="files-panel surface">
         {files.list.length === 0 ? (

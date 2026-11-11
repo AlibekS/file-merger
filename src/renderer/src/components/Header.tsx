@@ -10,6 +10,21 @@ export interface Appearance {
 
 export function Header({ value, onChange }: { value: Appearance; onChange: (v: Appearance) => void }) {
   const set = (patch: Partial<Appearance>) => onChange({ ...value, ...patch })
+  // На время перетаскивания слайдера отключаем CSS-переходы: иначе каждый шаг
+  // перезапускает анимацию фона на всех панелях.
+  const beginAdjust = () => {
+    const root = document.documentElement
+    root.dataset.adjusting = 'true'
+    const end = () => {
+      delete root.dataset.adjusting
+      window.removeEventListener('pointerup', end)
+      window.removeEventListener('pointercancel', end)
+      window.removeEventListener('blur', end)
+    }
+    window.addEventListener('pointerup', end)
+    window.addEventListener('pointercancel', end)
+    window.addEventListener('blur', end)
+  }
   const themes: { id: ThemeSetting; label: string; icon: (p: object) => React.ReactNode }[] = [
     { id: 'light', label: 'Светлая', icon: Icon.Sun },
     { id: 'dark', label: 'Тёмная', icon: Icon.Moon },
@@ -55,6 +70,7 @@ export function Header({ value, onChange }: { value: Appearance; onChange: (v: A
             value={value.depth}
             disabled={!value.glass}
             style={{ ['--fill' as string]: `${value.depth}%` }}
+            onPointerDown={beginAdjust}
             onChange={(e) => set({ depth: Number(e.target.value) })}
             aria-label="Глубина прозрачности"
           />
