@@ -21,6 +21,39 @@ Ghostscript и qpdf уже внутри — дополнительно ниче�
 > Установщик не подписан цифровой подписью, поэтому Windows SmartScreen при первом запуске может
 > показать «Windows защитила ваш компьютер». Нажмите **«Подробнее» → «Выполнить в любом случае»**.
 
+### Установка через консоль (PowerShell)
+
+Скачать последний релиз с GitHub и установить без вопросов (в профиль пользователя, права администратора не нужны):
+
+```powershell
+$url = "https://github.com/AlibekS/file-merger/releases/latest/download/PDF-Studio-Setup-1.0.0.exe"
+$exe = "$env:TEMP\PDF-Studio-Setup.exe"
+Invoke-WebRequest $url -OutFile $exe
+Unblock-File $exe
+Start-Process $exe -ArgumentList "/S" -Wait
+```
+
+Если установщик уже скачан — из папки с ним:
+
+```powershell
+.\PDF-Studio-Setup-1.0.0.exe /S
+```
+
+В другую папку: `/S /D=C:\Programs\PDF Studio` (ключ `/D=` — последним, путь без кавычек).
+Для всех пользователей компьютера (из PowerShell от имени администратора): `/S /allusers`.
+
+Программа ставится в `%LOCALAPPDATA%\Programs\pdf-studio`, запуск из консоли:
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\pdf-studio\PDF Studio.exe"
+```
+
+Удаление без вопросов:
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\pdf-studio\Uninstall PDF Studio.exe" /S
+```
+
 Готовые .exe собираются автоматически в GitHub Actions (workflow «Windows installer»: вкладка
 Actions → Run workflow, файлы — в Artifacts; при push тега `v*` они публикуются в Releases).
 
