@@ -6,4 +6,5 @@ release/
 .DS_Store
 resources/bin/*/*
 !resources/bin/*/.gitkeep
+!resources/bin/*/.gitkeep
 tests/.tmp/

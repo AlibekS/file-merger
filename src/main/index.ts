@@ -53,7 +53,7 @@ function applyAppearance(): void {
   if (isWin) {
     try {
       win.setTitleBarOverlay({
-        color: '#00000000',
+        color: native ? '#00000000' : solidBg(darkOn),
         symbolColor: darkOn ? '#F3F4F6' : '#1F2937',
         height: 52
       })
@@ -76,7 +76,11 @@ function createWindow(): void {
     ...(isWin
       ? {
           titleBarStyle: 'hidden' as const,
-          titleBarOverlay: { color: '#00000000', symbolColor: '#1F2937', height: 52 }
+          titleBarOverlay: {
+            color: solidBg(nativeTheme.shouldUseDarkColors),
+            symbolColor: nativeTheme.shouldUseDarkColors ? '#F3F4F6' : '#1F2937',
+            height: 52
+          }
         }
       : {}),
     webPreferences: {

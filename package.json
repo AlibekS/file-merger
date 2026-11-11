@@ -13,7 +13,8 @@
     "test": "electron-vite build && python3 tests/make_fixtures.py && node --test tests/unit.test.mjs tests/e2e.test.mjs",
     "dist": "electron-vite build && electron-builder",
     "dist:win": "electron-vite build && electron-builder --win",
-    "dist:mac": "electron-vite build && electron-builder --mac"
+    "dist:mac": "electron-vite build && electron-builder --mac",
+    "fetch:win-engines": "node scripts/fetch-win-engines.mjs"
   },
   "dependencies": {
     "pdf-lib": "1.17.1"
@@ -65,9 +66,21 @@
     },
     "win": {
       "target": [
-        "nsis",
-        "portable"
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
+      "icon": "build/icon.png",
+      "artifactName": "PDF-Studio-Setup-${version}.${ext}",
       "extraResources": [
         {
           "from": "resources/bin/win",
@@ -96,14 +109,22 @@
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "PDF Studio",
+      "installerLanguages": [
+        "ru_RU"
+      ],
+      "language": "1049",
+      "runAfterFinish": true,
+      "artifactName": "PDF-Studio-Setup-${version}.${ext}"
     },
-    "fileAssociations": [
-      {
-        "ext": "pdf",
-        "name": "PDF",
-        "role": "Viewer"
-      }
-    ]
+    "copyright": "PDF Studio",
+    "portable": {
+      "artifactName": "PDF-Studio-Portable-${version}.${ext}"
+    }
   }
 }
