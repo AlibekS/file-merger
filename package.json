@@ -1,0 +1,109 @@
+{
+  "name": "pdf-studio",
+  "productName": "PDF Studio",
+  "version": "1.0.0",
+  "description": "Локальное десктопное приложение для объединения, разделения и сжатия PDF без лимитов",
+  "main": "out/main/index.js",
+  "license": "MIT",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "electron-vite build && python3 tests/make_fixtures.py && node --test tests/unit.test.mjs tests/e2e.test.mjs",
+    "dist": "electron-vite build && electron-builder",
+    "dist:win": "electron-vite build && electron-builder --win",
+    "dist:mac": "electron-vite build && electron-builder --mac"
+  },
+  "dependencies": {
+    "pdf-lib": "1.17.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "electron": "^39.8.10",
+    "electron-builder": "^26.18.0",
+    "electron-vite": "^6.0.0",
+    "pdfjs-dist": "^4.10.38",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "typescript": "5.9",
+    "vite": "^8.3.8"
+  },
+  "author": "PDF Studio",
+  "build": {
+    "appId": "app.pdfstudio.desktop",
+    "productName": "PDF Studio",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "out/main/pdflib-worker.js"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "extraResources": [
+        {
+          "from": "resources/bin/mac",
+          "to": "bin",
+          "filter": [
+            "**/*"
+          ]
+        }
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "extraResources": [
+        {
+          "from": "resources/bin/win",
+          "to": "bin",
+          "filter": [
+            "**/*"
+          ]
+        }
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Office",
+      "extraResources": [
+        {
+          "from": "resources/bin/linux",
+          "to": "bin",
+          "filter": [
+            "**/*"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "fileAssociations": [
+      {
+        "ext": "pdf",
+        "name": "PDF",
+        "role": "Viewer"
+      }
+    ]
+  }
+}
