@@ -1,28 +1,61 @@
 // Менеджер заданий: пул фоновых обработчиков (по числу ядер), прогресс, отмена.
 
-import { cpus } from 'node:os'
+import { cpus, totalmem } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { WebContents } from 'electron'
 import type { FileProgress, JobFile, JobProgress, JobRequest, FileStatus } from '../shared/types'
-import { compressFile, mergeFiles, splitAllPages, extractRanges, PasswordError } from './engine'
+import { compressFile, mergeFiles, splitAllPages, extractRanges, PasswordError, MergeInputError } from './engine'
 import { CancelledError, runPool } from './proc'
-import { uniquePath, release, stem, ensureDir, sanitizeFileName } from './fsutil'
+import { uniquePath, release, stem, ensureDir, sanitizeFileName, rmDirIfEmpty } from './fsutil'
 import { parseRanges, clampRanges, pagesToRanges, rangeLabel, type PageRange } from '../shared/ranges'
 
 interface ActiveJob {
   id: string
   controller: AbortController
+  /** Завершается, когда задание полностью остановлено: процессы завершены, временные файлы убраны. */
+  settled: Promise<void>
 }
 
 const jobs = new Map<string, ActiveJob>()
 let jobCounter = 0
+const idleListeners = new Set<() => void>()
 
 export function cancelJob(id: string): void {
   jobs.get(id)?.controller.abort()
 }
 
+export function hasActiveJobs(): boolean {
+  return jobs.size > 0
+}
+
+/** Вызывается каждый раз, когда не осталось активных заданий. */
+export function onJobsIdle(cb: () => void): void {
+  idleListeners.add(cb)
+}
+
+/**
+ * Отменяет все задания и ждёт их остановки: дочерние gs/qpdf убиты и завершились,
+ * .part-файлы удалены (это делают finally-блоки движка).
+ */
+export async function abortAllJobs(): Promise<void> {
+  const active = [...jobs.values()]
+  for (const j of active) j.controller.abort()
+  await Promise.all(active.map((j) => j.settled))
+}
+
 export function concurrency(): number {
   return Math.max(1, cpus().length)
+}
+
+const MB = 1024 * 1024
+
+/**
+ * Сколько байт входных файлов можно обрабатывать одновременно. Ghostscript на крупных
+ * сканах занимает память и диск пропорционально размеру, поэтому файлы по сотне мегабайт
+ * идут по несколько штук, а гигабайтные — по одному-два, независимо от числа ядер.
+ */
+export function poolBudget(): number {
+  return Math.min(2048 * MB, Math.max(512 * MB, Math.floor(totalmem() / 8)))
 }
 
 class Reporter {
@@ -96,8 +129,8 @@ function outDirFor(file: JobFile, req: JobRequest): string {
 export function startJob(wc: WebContents, req: JobRequest): string {
   const id = `job${++jobCounter}`
   const controller = new AbortController()
-  jobs.set(id, { id, controller })
   const signal = controller.signal
+  const weight = { of: (f: JobFile): number => f.size || 0, budget: poolBudget() }
 
   const total = req.kind === 'merge' ? 1 : req.files.length
   const rep = new Reporter(wc, id, total)
@@ -105,6 +138,7 @@ export function startJob(wc: WebContents, req: JobRequest): string {
   const finish = (extra: Partial<JobProgress> = {}): void => {
     jobs.delete(id)
     rep.flush({ finished: true, cancelled: signal.aborted, ...extra })
+    if (jobs.size === 0) for (const cb of idleListeners) cb()
   }
 
   const run = async (): Promise<Partial<JobProgress>> => {
@@ -141,7 +175,8 @@ export function startJob(wc: WebContents, req: JobRequest): string {
             release(target)
           }
         },
-        signal
+        signal,
+        weight
       )
       return { outputDir: req.output.mode === 'folder' ? req.output.dir : firstDir }
     }
@@ -163,7 +198,16 @@ export function startJob(wc: WebContents, req: JobRequest): string {
         return { outputPath: target, outputDir: dir, ...{ outputSize: size } }
       } catch (e) {
         const { status, message } = errorStatus(e)
-        for (const f of req.files) rep.file(f.id, status === 'locked' ? 'error' : status, { message })
+        const bad = e instanceof MergeInputError ? req.files.find((f) => f.path === e.path) : undefined
+        if (bad) {
+          // Виноват конкретный файл — ошибкой помечаем только его, остальные возвращаем в «готов».
+          for (const f of req.files) {
+            if (f === bad) rep.file(f.id, 'error', { message })
+            else rep.file(f.id, 'ready')
+          }
+        } else {
+          for (const f of req.files) rep.file(f.id, status === 'locked' ? 'error' : status, { message })
+        }
         rep.done = 1
         return {}
       } finally {
@@ -183,6 +227,7 @@ export function startJob(wc: WebContents, req: JobRequest): string {
         const base = stem(f.path)
         rep.file(f.id, 'processing', { fraction: 0 })
         const reservedPaths: string[] = []
+        let folderMade: string | undefined
         const reserve = (d: string, n: string): string => {
           const p = uniquePath(d, n)
           reservedPaths.push(p)
@@ -191,6 +236,7 @@ export function startJob(wc: WebContents, req: JobRequest): string {
         try {
           if (req.mode === 'all') {
             const folder = reserve(dir, `${base}_split`)
+            folderMade = folder
             const outs = await splitAllPages(f.path, folder, {
               password: f.password,
               pages: f.pages,
@@ -218,6 +264,7 @@ export function startJob(wc: WebContents, req: JobRequest): string {
             rep.file(f.id, 'done', { outputPath: target, outputCount: 1 })
           } else {
             const folder = reserve(dir, `${base}_split`)
+            folderMade = folder
             await ensureDir(folder)
             for (let i = 0; i < ranges.length; i++) {
               const r = ranges[i]
@@ -229,20 +276,23 @@ export function startJob(wc: WebContents, req: JobRequest): string {
             rep.file(f.id, 'done', { outputPath: folder, outputCount: ranges.length })
           }
         } catch (e) {
+          // При ошибке или отмене не оставляем после себя пустую папку «…_split».
+          if (folderMade) await rmDirIfEmpty(folderMade)
           const { status, message } = errorStatus(e)
           rep.file(f.id, status, { message })
         } finally {
           reservedPaths.forEach(release)
         }
       },
-      signal
+      signal,
+      weight
     )
     return { outputDir: req.output.mode === 'folder' ? req.output.dir : lastDir }
   }
 
-  run()
+  const settled = run()
     .then((extra) => {
-      if (signal.aborted) {
+      if (signal.aborted && !wc.isDestroyed()) {
         // всё, что не успело начаться, помечаем отменённым
         wc.send('job:cancelled', id)
       }
@@ -252,6 +302,7 @@ export function startJob(wc: WebContents, req: JobRequest): string {
       console.error(e)
       finish()
     })
+  jobs.set(id, { id, controller, settled })
 
   return id
 }

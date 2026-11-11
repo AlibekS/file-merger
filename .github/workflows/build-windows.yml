@@ -24,7 +24,13 @@ jobs:
       - run: npm ci
       - run: node scripts/fetch-win-engines.mjs
       - run: npx electron-vite build
-      - run: npx electron-builder --win --publish never
+      # Версия установщика и имён файлов = версия релиза (поле запуска или тег без «v»),
+      # а не то, что записано в package.json.
+      - name: Build installer
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+        run: npx electron-builder --win --publish never -c.extraMetadata.version="${RELEASE_VERSION#v}"
       - uses: actions/upload-artifact@v4
         with:
           name: PDF-Studio-Windows

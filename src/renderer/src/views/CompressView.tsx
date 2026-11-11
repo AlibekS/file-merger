@@ -43,6 +43,8 @@ export function CompressView({ onBack, tools }: { onBack: () => void; tools: Too
   // для остальных эвристика корректируется средней поправкой по уже измеренным.
   const sampled = useRef(new Set<string>())
   useEffect(() => {
+    // Лимит считается по файлам, которые сейчас в списке: удалённые освобождают место.
+    for (const id of sampled.current) if (!files.items[id]) sampled.current.delete(id)
     if (!tools?.ghostscript || !tools.qpdf) return
     const batch = []
     for (const it of files.list) {
@@ -52,7 +54,7 @@ export function CompressView({ onBack, tools }: { onBack: () => void; tools: Too
       batch.push({ id: it.id, path: it.path, password: it.password, pages: it.info.pages })
     }
     if (batch.length) void window.pdf.sample(batch)
-  }, [files.list, tools])
+  }, [files.list, files.items, tools])
 
   const correction = useMemo(() => {
     const acc: Record<CompressPreset, number[]> = { light: [], medium: [], ultra: [] }
@@ -94,7 +96,9 @@ export function CompressView({ onBack, tools }: { onBack: () => void; tools: Too
 
   const runnable = files.list.filter(isRunnable)
   const needsGs = preset !== 'light' && tools && !tools.ghostscript
-  const canStart = runnable.length > 0 && !job.running && !needsGs && (output.mode === 'source' || !!output.dir)
+  // Пока идёт анализ, запуск закрыт: иначе ещё не проверенные файлы молча не попали бы в задание.
+  const analysing = files.list.some((f) => f.status === 'pending')
+  const canStart = runnable.length > 0 && !analysing && !job.running && !needsGs && (output.mode === 'source' || !!output.dir)
 
   const start = () =>
     job.start({
@@ -145,7 +149,7 @@ export function CompressView({ onBack, tools }: { onBack: () => void; tools: Too
 
   return (
     <div className="workspace">
-      <WorkspaceHead title="Сжать PDF" icon={<CompressIcon />} onBack={onBack} />
+      <WorkspaceHead title="Сжать PDF" icon={<CompressIcon />} onBack={onBack} busy={job.running} />
       {tools && !tools.ghostscript && (
         <MissingEngineBanner text="Ghostscript не найден: доступен только режим «Лёгкая». Для режимов «Средняя» и «Ультра» установите Ghostscript (см. README) и перезапустите приложение." />
       )}
@@ -216,6 +220,7 @@ export function CompressView({ onBack, tools }: { onBack: () => void; tools: Too
             {runnable.length > 1 ? ` (${runnable.length.toLocaleString('ru-RU')})` : ''}
           </button>
           {needsGs && <p className="hint err">Для этого режима нужен Ghostscript.</p>}
+          {analysing && !job.running && <p className="hint">Идёт анализ файлов…</p>}
         </div>
       </aside>
 

@@ -79,19 +79,55 @@ export async function runQpdf(
   }
 }
 
-/** Пул задач с ограничением параллелизма. */
-export async function runPool<T>(
+/**
+ * Пул задач с ограничением параллелизма. Если задан weight, одновременно в работе
+ * держится не больше budget суммарного «веса» (например, байт входных файлов):
+ * мелкие файлы идут по числу ядер, крупные — по одному-два. Задача, которая одна
+ * тяжелее бюджета, запускается в одиночку.
+ */
+export function runPool<T>(
   items: T[],
   concurrency: number,
   fn: (item: T, index: number) => Promise<void>,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  weight?: { of: (item: T) => number; budget: number }
 ): Promise<void> {
-  let next = 0
-  const workers = Array.from({ length: Math.max(1, Math.min(concurrency, items.length)) }, async () => {
-    while (next < items.length && !signal?.aborted) {
-      const i = next++
-      await fn(items[i], i)
+  return new Promise((resolve, reject) => {
+    const limit = Math.max(1, concurrency)
+    let next = 0
+    let active = 0
+    let load = 0
+    let failed = false
+    let error: unknown
+    const pump = (): void => {
+      while (next < items.length && !signal?.aborted && !failed && active < limit) {
+        const w = weight ? Math.max(0, weight.of(items[next])) : 0
+        if (weight && active > 0 && load + w > weight.budget) break
+        const i = next++
+        active++
+        load += w
+        let p: Promise<void>
+        try {
+          p = fn(items[i], i)
+        } catch (e) {
+          p = Promise.reject(e)
+        }
+        p.catch((e) => {
+          if (!failed) {
+            failed = true
+            error = e
+          }
+        }).finally(() => {
+          active--
+          load -= w
+          pump()
+        })
+      }
+      if (active === 0 && (failed || signal?.aborted || next >= items.length)) {
+        if (failed) reject(error)
+        else resolve()
+      }
     }
+    pump()
   })
-  await Promise.all(workers)
 }

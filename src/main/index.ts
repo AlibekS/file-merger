@@ -7,7 +7,7 @@ import { Readable } from 'node:stream'
 import { collectPdfs } from './fsutil'
 import { inspect, sampleRatios } from './engine'
 import { findTools } from './tools'
-import { startJob, cancelJob, concurrency } from './jobs'
+import { startJob, cancelJob, concurrency, hasActiveJobs, onJobsIdle, abortAllJobs } from './jobs'
 import { runPool } from './proc'
 import type { FileInfo, JobRequest, ToolsInfo } from '../shared/types'
 
@@ -18,6 +18,12 @@ const isWin = process.platform === 'win32'
 protocol.registerSchemesAsPrivileged([
   { scheme: 'pdfstudio', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true } }
 ])
+
+/** Пробное сжатие, запущенное прямо сейчас (не привязано к заданиям, отменяется при выходе). */
+const sampleAbort = new AbortController()
+const activeSamples = new Set<Promise<void>>()
+let quitting = false
+let readyToQuit = false
 
 /** Только файлы, выбранные пользователем, доступны через протокол. */
 const allowedFiles = new Set<string>()
@@ -207,21 +213,27 @@ function registerIpc(): void {
   const sampleQueue: { id: string; path: string; password?: string; pages: number; wc: Electron.WebContents }[] = []
   let sampling = 0
   const pumpSamples = (): void => {
+    // Пока идёт основное задание, новые пробы не запускаем — очередь на паузе.
+    if (quitting || hasActiveJobs()) return
     const limit = Math.max(1, Math.floor(concurrency() / 2))
     while (sampling < limit && sampleQueue.length) {
       const t = sampleQueue.shift()!
       if (t.wc.isDestroyed()) continue
       sampling++
-      void sampleRatios(t.path, t.pages, t.password)
+      const p = sampleRatios(t.path, t.pages, t.password, sampleAbort.signal)
         .then((ratios) => {
-          if (!t.wc.isDestroyed()) t.wc.send('files:ratios', [{ id: t.id, ratios }])
+          if (!sampleAbort.signal.aborted && !t.wc.isDestroyed()) t.wc.send('files:ratios', [{ id: t.id, ratios }])
         })
+        .catch(() => undefined)
         .finally(() => {
           sampling--
+          activeSamples.delete(p)
           pumpSamples()
         })
+      activeSamples.add(p)
     }
   }
+  onJobsIdle(pumpSamples)
   ipcMain.handle('files:sample', (e, files: { id: string; path: string; password?: string; pages: number }[]) => {
     for (const f of files) sampleQueue.push({ ...f, wc: e.sender })
     pumpSamples()
@@ -252,4 +264,22 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (!isMac) app.quit()
+})
+
+// Перед выходом останавливаем всё, что запущено: отменяем задания и пробное сжатие,
+// ждём завершения дочерних gs/qpdf и удаления их .part-файлов, и только потом выходим.
+const QUIT_TIMEOUT_MS = 10_000
+app.on('before-quit', (e) => {
+  if (readyToQuit) return
+  if (!quitting && !hasActiveJobs() && activeSamples.size === 0) return
+  e.preventDefault()
+  if (quitting) return
+  quitting = true
+  sampleAbort.abort()
+  const stopped = Promise.all([abortAllJobs(), ...activeSamples]).catch(() => undefined)
+  const timeout = new Promise<void>((r) => setTimeout(r, QUIT_TIMEOUT_MS))
+  void Promise.race([stopped, timeout]).then(() => {
+    readyToQuit = true
+    app.quit()
+  })
 })

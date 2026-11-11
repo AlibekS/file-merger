@@ -6,6 +6,8 @@ export function useJob(files: FilesApi) {
   const [jobId, setJobId] = useState<string | null>(null)
   const [progress, setProgress] = useState<JobProgress | null>(null)
   const idRef = useRef<string | null>(null)
+  // Синхронная защита от двойного клика: running обновится только после ответа main-процесса.
+  const starting = useRef(false)
   const { cancelQueued } = files
 
   useEffect(() => {
@@ -29,11 +31,20 @@ export function useJob(files: FilesApi) {
 
   const start = useCallback(
     async (req: JobRequest) => {
-      files.resetForRun(req.files.map((f) => f.id))
-      setProgress({ jobId: '', done: 0, total: req.kind === 'merge' ? 1 : req.files.length, fraction: 0, finished: false })
-      const id = await window.pdf.startJob(req)
-      idRef.current = id
-      setJobId(id)
+      if (starting.current || idRef.current) return
+      starting.current = true
+      try {
+        files.resetForRun(req.files.map((f) => f.id))
+        setProgress({ jobId: '', done: 0, total: req.kind === 'merge' ? 1 : req.files.length, fraction: 0, finished: false })
+        const id = await window.pdf.startJob(req)
+        idRef.current = id
+        setJobId(id)
+      } catch (e) {
+        setProgress(null)
+        throw e
+      } finally {
+        starting.current = false
+      }
     },
     [files]
   )
