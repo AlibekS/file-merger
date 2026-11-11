@@ -81,7 +81,7 @@ export function App() {
       </div>
       <Header value={appearance} onChange={setAppearance} />
       <main className="main">
-        {tool === null && <Home onOpen={setTool} tools={tools} />}
+        {tool === null && <Home onOpen={setTool} />}
         {tool === 'compress' && <CompressView onBack={() => setTool(null)} tools={tools} />}
         {tool === 'merge' && <MergeView onBack={() => setTool(null)} />}
         {tool === 'split' && <SplitView onBack={() => setTool(null)} />}

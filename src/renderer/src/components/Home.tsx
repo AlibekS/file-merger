@@ -1,5 +1,5 @@
 import { CompressIcon, MergeIcon, SplitIcon } from '../icons'
-import type { ToolKind, ToolsInfo } from '../../../shared/types'
+import type { ToolKind } from '../../../shared/types'
 
 export const TOOLS: { id: ToolKind; title: string; desc: string; Icon: typeof MergeIcon }[] = [
   {
@@ -22,8 +22,7 @@ export const TOOLS: { id: ToolKind; title: string; desc: string; Icon: typeof Me
   }
 ]
 
-export function Home({ onOpen, tools }: { onOpen: (t: ToolKind) => void; tools: ToolsInfo | null }) {
-  const missing = tools && (!tools.ghostscript || !tools.qpdf)
+export function Home({ onOpen }: { onOpen: (t: ToolKind) => void }) {
   return (
     <div className="home">
       <h1>Всё для работы с PDF</h1>
@@ -37,13 +36,6 @@ export function Home({ onOpen, tools }: { onOpen: (t: ToolKind) => void; tools: 
           </button>
         ))}
       </div>
-      {tools && (
-        <div className="engine-note surface" title={`${tools.ghostscript ?? 'Ghostscript не найден'}\n${tools.qpdf ?? 'qpdf не найден'}`}>
-          <span className={`dot ${missing ? 'warn' : ''}`} />
-          Ghostscript: {tools.ghostscript ? 'готов' : 'не найден'} · qpdf: {tools.qpdf ? 'готов' : 'не найден'} · потоков:{' '}
-          {tools.cpus}
-        </div>
-      )}
     </div>
   )
 }

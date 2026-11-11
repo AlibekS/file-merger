@@ -241,18 +241,28 @@ button {
 
 .header {
   -webkit-app-region: drag;
-  display: flex;
+  /* Три колонки: логотип — панель настроек строго по центру окна — место под кнопки окна.
+     Боковые колонки равны, поэтому центр не зависит от ширины логотипа и кнопок. */
+  display: grid;
+  grid-template-columns: minmax(max-content, 1fr) auto minmax(0, 1fr);
   align-items: center;
   gap: 16px;
   height: 64px;
   padding: 0 20px;
   flex-shrink: 0;
 }
+.header .settings-bar {
+  grid-column: 2;
+}
 :root[data-platform='darwin'] .header {
-  padding-left: 92px;
+  grid-template-columns: minmax(max-content, 1fr) auto minmax(72px, 1fr);
+}
+:root[data-platform='darwin'] .brand {
+  padding-left: 72px;
 }
 :root[data-platform='win32'] .header {
-  padding-right: 150px;
+  /* справа — системные кнопки «свернуть / развернуть / закрыть» */
+  grid-template-columns: minmax(max-content, 1fr) auto minmax(130px, 1fr);
 }
 .header > * {
   -webkit-app-region: no-drag;
@@ -506,30 +516,6 @@ input[type='range']::-webkit-slider-thumb {
   color: var(--text-2);
   font-size: 15px;
   line-height: 1.55;
-}
-
-.engine-note {
-  margin-top: 28px;
-  font-size: 12.5px;
-  color: var(--text-2);
-  padding: 10px 16px;
-  border-radius: 999px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.engine-note.surface {
-  border-radius: 999px;
-}
-.dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--ok);
-  display: inline-block;
-}
-.dot.warn {
-  background: var(--warn);
 }
 
 @keyframes fade-in {
